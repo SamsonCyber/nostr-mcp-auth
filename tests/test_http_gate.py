@@ -78,7 +78,8 @@ async def test_missing_auth_no_tool_side_effect(app):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/mcp", content=body, headers={"Content-Type": "application/json"})
     assert r.status_code == 401
-    assert r.json()["reason"] == "missing_authorization"
+    assert r.json()["code"] == "unauthorized"
+    assert "reason" not in r.json()
     assert TOOL_INVOCATIONS == []
 
 
@@ -124,7 +125,7 @@ async def test_not_allowlisted_no_tool(identity):
         },
     )
     assert r.status_code == 401
-    assert r.json()["reason"] == "not_allowlisted"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 
@@ -145,7 +146,7 @@ async def test_empty_allowlist_denies_all(identity):
         },
     )
     assert r.status_code == 401
-    assert r.json()["reason"] == "empty_allowlist"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 

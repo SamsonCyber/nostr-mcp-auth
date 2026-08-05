@@ -85,7 +85,7 @@ async def test_http_replay_second_request(setup):
         r2 = await client.post("/mcp", content=body, headers=headers)
     assert r1.status_code == 200, r1.text
     assert r2.status_code == 401
-    assert r2.json()["reason"] == "replay"
+    assert r2.json()["code"] == "unauthorized"
     assert sum(1 for i in TOOL_INVOCATIONS if i["tool"] == "whoami") == 1
 
 
@@ -174,7 +174,7 @@ async def test_expired_event(setup):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/mcp", content=body, headers=headers)
     assert r.status_code == 401
-    assert r.json()["reason"] == "expired"
+    assert r.json()["code"] == "unauthorized"
     assert not any(i["tool"] == "whoami" for i in TOOL_INVOCATIONS)
 
 

@@ -183,7 +183,7 @@ async def test_trust_proxy_false_ignores_forwarded_host(app):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/mcp", content=body, headers=headers)
     assert r.status_code == 401
-    assert r.json()["reason"] == "url_mismatch"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 

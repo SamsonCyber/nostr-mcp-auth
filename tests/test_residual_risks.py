@@ -180,7 +180,7 @@ async def test_trust_proxy_false_ignores_forwarded_even_if_signed_for_it():
     }
     r = await _asgi_post(app, headers, body)
     assert r.status_code == 401
-    assert r.json()["reason"] == "url_mismatch"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 
@@ -239,7 +239,7 @@ async def test_stolen_non_allowlisted_nsec_still_denied():
     }
     r = await _asgi_post(app, headers, body)
     assert r.status_code == 401
-    assert r.json()["reason"] == "not_allowlisted"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 
@@ -259,7 +259,7 @@ async def test_client_without_nip98_cannot_call_tools(identity):
     # no Authorization header at all
     r = await _asgi_post(app, {"Content-Type": "application/json", "Host": "test"}, body)
     assert r.status_code == 401
-    assert r.json()["reason"] == "missing_authorization"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 
@@ -281,7 +281,7 @@ async def test_client_with_bearer_api_key_style_rejected(identity):
         body,
     )
     assert r.status_code == 401
-    assert r.json()["reason"] == "invalid_scheme"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 

@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable
-from urllib.parse import urlencode
+from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -13,7 +12,13 @@ from starlette.routing import Route
 
 from .config import AuthConfig
 from .gate import AuthGate
+from .http_safe import (
+    forbidden_rpc_response,
+    json_no_store,
+    unauthorized_response,
+)
 from .nip98 import AuthError
+from .snoop import scrub_secrets
 
 logger = logging.getLogger("nostr_mcp_auth.server")
 
@@ -52,9 +57,9 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
     async def mcp_endpoint(request: Request) -> Response:
         body = await request.body()
         url = reconstruct_url(request, trust_proxy=config.trust_proxy)
+        # Real HTTP method only; never honor X-HTTP-Method-Override / method spoof headers
         method = request.method.upper()
 
-        # Auth gate: nothing below runs without success
         try:
             ctx = auth_gate.authenticate(
                 authorization=request.headers.get("authorization"),
@@ -63,22 +68,23 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
                 body=body,
             )
         except AuthError as exc:
-            return JSONResponse(
-                {"error": "unauthorized", "reason": exc.reason},
-                status_code=401,
+            # Internal reason for operators only; external body is constrained
+            logger.info(
+                "mcp auth failed internal_reason=%s",
+                scrub_secrets(exc.reason),
             )
+            return unauthorized_response()
 
         if not body:
-            return JSONResponse({"error": "empty_body"}, status_code=400)
+            return json_no_store({"error": "empty_body"}, status_code=400)
 
         try:
             rpc = json.loads(body.decode("utf-8"))
         except Exception:
-            return JSONResponse({"error": "invalid_json"}, status_code=400)
+            return json_no_store({"error": "invalid_json"}, status_code=400)
 
-        # Batch not required for v1
         if not isinstance(rpc, dict):
-            return JSONResponse({"error": "invalid_rpc"}, status_code=400)
+            return json_no_store({"error": "invalid_rpc"}, status_code=400)
 
         req_id = rpc.get("id")
         rpc_method = rpc.get("method")
@@ -105,7 +111,7 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
                     "inputSchema": {"type": "object", "properties": {}},
                 },
             ]
-            return JSONResponse(
+            return json_no_store(
                 {"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools}}
             )
 
@@ -116,18 +122,16 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
             try:
                 auth_gate.authorize_tool(ctx, tool_name)
             except AuthError as exc:
-                return JSONResponse(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "error": {"code": -32003, "message": exc.reason},
-                    },
-                    status_code=403,
+                logger.info(
+                    "mcp tool denied internal_reason=%s tool=%s",
+                    scrub_secrets(exc.reason),
+                    scrub_secrets(str(tool_name)),
                 )
+                return forbidden_rpc_response(req_id)
 
             result = _dispatch_tool(tool_name, arguments, ctx.pubkey, ctx.npub)
             if result.get("_not_found"):
-                return JSONResponse(
+                return json_no_store(
                     {
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -135,7 +139,7 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
                     },
                     status_code=404,
                 )
-            return JSONResponse(
+            return json_no_store(
                 {
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -148,7 +152,7 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
                 }
             )
 
-        return JSONResponse(
+        return json_no_store(
             {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -169,11 +173,12 @@ def create_app(config: AuthConfig, *, gate: AuthGate | None = None) -> Starlette
                 body=body,
             )
         except AuthError as exc:
-            return JSONResponse(
-                {"error": "unauthorized", "reason": exc.reason},
-                status_code=401,
+            logger.info(
+                "mcp GET auth failed internal_reason=%s",
+                scrub_secrets(exc.reason),
             )
-        return JSONResponse(
+            return unauthorized_response()
+        return json_no_store(
             {"error": "method_not_allowed", "detail": "use POST /mcp for JSON-RPC"},
             status_code=405,
         )

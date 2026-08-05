@@ -121,3 +121,28 @@ def default_config_dict(allow_npub: str | None = None) -> dict:
             "port": 8787,
         },
     }
+
+
+def serve_policy_errors(
+    config: AuthConfig,
+    *,
+    force_open: bool = False,
+    force_trust_proxy: bool = False,
+) -> list[str]:
+    """Return hard-fail messages for unsafe serve settings (empty = ok to bind).
+
+    open and trust_proxy stay available for labs, but serve refuses them unless
+    the operator passes an explicit force flag on the CLI.
+    """
+    errors: list[str] = []
+    if config.open and not force_open:
+        errors.append(
+            "auth.open=true refuses to serve without --force-open "
+            "(any valid NIP-98 identity would be accepted)"
+        )
+    if config.trust_proxy and not force_trust_proxy:
+        errors.append(
+            "auth.trust_proxy=true refuses to serve without --force-trust-proxy "
+            "(u binding uses X-Forwarded-* headers)"
+        )
+    return errors

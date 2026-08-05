@@ -236,7 +236,7 @@ async def test_http_wrong_host_binding(app_cfg):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/mcp", content=body, headers=headers)
     assert r.status_code == 401
-    assert r.json()["reason"] == "url_mismatch"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []
 
 
@@ -301,5 +301,5 @@ async def test_http_body_swap_after_sign(app_cfg):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/mcp", content=body_b, headers=headers)
     assert r.status_code == 401
-    assert r.json()["reason"] == "payload_mismatch"
+    assert r.json()["code"] == "unauthorized"
     assert TOOL_INVOCATIONS == []

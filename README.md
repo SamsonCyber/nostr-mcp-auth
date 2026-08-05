@@ -1,9 +1,8 @@
 # nostr-mcp-auth
 
-**NIP-98 authentication for HTTP MCP.**  
-Agents prove a Nostr identity. No proof, no tools.
+# Lock MCP tools to a Nostr key
 
-Fail-closed. Offline verify. No relay on the hot path. Built for operators who want crypto identity on MCP without turning OAuth into a second product.
+**No proof, no tools.** Agents sign every HTTP call with a Nostr secret. The server checks the signature offline. Wrong key, bad sig, stale event, or body swap: **401**. Tool code never runs.
 
 ```bash
 pip install -e .
@@ -13,27 +12,87 @@ nostr-mcp-auth serve
 nostr-mcp-auth call --tool whoami
 ```
 
-That is the whole loop.
+Crypto identity for agent tool access. No OAuth dance required for the lab or fleet path.
 
 ---
 
-## Why this exists
+## What is Nostr?
 
-MCP over the network needs auth. Stock options are:
+**Nostr** is a simple open protocol for signed messages. Each user (or agent) has:
 
-- **Nothing** (local stdio trust)
-- **OAuth 2.1** (full IdP, right for some enterprises)
-- **Shared API keys** (boring, leaked forever)
+| Piece | What it is |
+|-------|------------|
+| **nsec** | Private key. Signs. Keep offline / in a vault. |
+| **npub** | Public key. Identity. Safe to put on an allowlist. |
 
-**nostr-mcp-auth** is a third rail: every request carries a short-lived **signed Nostr event** (NIP-98). The server checks the signature, URL, method, body hash, allowlist, and optional roles. If anything is wrong, tools never run.
+Messages (events) are JSON objects with a **BIP-340 Schnorr signature**. Anyone can verify who signed without a central account server.
 
-You are not inventing passwords. You are binding MCP calls to **key possession**.
+Common uses: social apps, relays, Lightning wallet connect. The part we care about for MCP is pure **crypto identity**: prove key possession.
+
+You do **not** need Damus, a public relay, or a social profile for this package. Verification is local.
+
+### NIP-98 (HTTP auth)
+
+[NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) defines how to authorize an HTTP request with a short-lived signed event:
+
+- Kind **27235**
+- Tags bind the request: URL (`u`), method (`method`), optional body hash (`payload`)
+- Header: `Authorization: Nostr <base64-encoded event>`
+
+That is the protocol. This repo turns it into a **gate in front of MCP tools**.
 
 ---
 
-## 30-second plug-in
+## How we use Nostr for MCP
 
-### 1. Install
+[MCP](https://modelcontextprotocol.io/) (Model Context Protocol) is how agents call tools over stdio or HTTP. Network MCP needs auth. We put NIP-98 on **`POST /mcp`**.
+
+| Step | What happens |
+|------|----------------|
+| 1 | Agent (or sidecar) builds a NIP-98 event for this exact URL, method, and body. |
+| 2 | Signs with **nsec**. |
+| 3 | Sends JSON-RPC (`tools/list` / `tools/call`) plus `Authorization: Nostr …`. |
+| 4 | Server verifies: kind, signature, time window, URL/method match, body hash, allowlist, optional roles, replay. |
+| 5 | Only then does the tool run. |
+
+```
+Agent / sidecar                         MCP server (this package)
+     |                                          |
+     |  POST /mcp                               |
+     |  Authorization: Nostr <signed event>     |
+     |  tools/call { name, arguments }          |
+     |----------------------------------------->|
+     |                                          |  verify NIP-98 (offline)
+     |                                          |  allowlist + roles
+     |                                          |  run tool  OR  401/403
+     |<-----------------------------------------|
+```
+
+**What we take from Nostr**
+
+- Keypair identity (`npub` / `nsec`)
+- Event shape + Schnorr signatures
+- NIP-98 request binding
+
+**What we do not need**
+
+- Public relays for auth
+- Social graph, follows, or notes
+- Publishing the auth event anywhere
+
+**What we add**
+
+- Fail-closed HTTP MCP surface (`tools/list`, `tools/call`)
+- Allow / deny lists and optional tool roles
+- Process-local replay defense
+- Operator CLI: `quickstart`, `serve`, `call`, `doctor`
+- Red-team tested gate (see `docs/`)
+
+---
+
+## Plug in
+
+### Install
 
 ```bash
 git clone https://github.com/SamsonCyber/nostr-mcp-auth.git
@@ -41,65 +100,39 @@ cd nostr-mcp-auth
 pip install -e .
 ```
 
-### 2. Bootstrap identity + config
+### Bootstrap
 
 ```bash
 nostr-mcp-auth quickstart
 ```
 
-Creates:
-
 | File | Purpose |
 |------|---------|
-| `caller.nsec` | Secret key for the agent (do not commit) |
+| `caller.nsec` | Agent secret (never commit) |
 | `caller.npub` | Public identity |
-| `mcp-auth.yaml` | Server config with that npub allowlisted |
+| `mcp-auth.yaml` | Server config; npub already allowlisted |
 
-### 3. Serve
+### Serve
 
 ```bash
 nostr-mcp-auth serve
 # http://127.0.0.1:8787/mcp
-# http://127.0.0.1:8787/health   (no auth)
+# http://127.0.0.1:8787/health   (public)
 ```
 
-### 4. Call like an agent
+`serve` refuses `auth.open=true` and `auth.trust_proxy=true` unless you pass
+`--force-open` or `--force-trust-proxy` (lab / reverse-proxy only).
+
+### Call
 
 ```bash
 nostr-mcp-auth call --tool whoami
 nostr-mcp-auth call --tool protected_echo --arg text=hello
 nostr-mcp-auth list-tools
-```
-
-### 5. Sanity check
-
-```bash
 nostr-mcp-auth doctor
 ```
 
----
-
-## How agents authenticate
-
-```
-Agent / sidecar                 MCP server
-     |                               |
-     |  POST /mcp                    |
-     |  Authorization: Nostr <evt>   |
-     |  JSON-RPC tools/call          |
-     |------------------------------>|
-     |     verify NIP-98             |
-     |     allowlist + roles         |
-     |     then run tool             |
-     |<------------------------------|
-```
-
-1. Build event kind **27235** with tags `u` (URL), `method`, optional `payload` (body SHA-256).
-2. Sign with **nsec**.
-3. Send `Authorization: Nostr <base64 event>`.
-4. Server verifies offline. No Damus. No relay round-trip.
-
-### Python (same path the CLI uses)
+### Python
 
 ```python
 from nostr_mcp_auth.client import call_tool
@@ -107,63 +140,62 @@ from nostr_mcp_auth.client import call_tool
 print(call_tool("http://127.0.0.1:8787/mcp", "caller.nsec", "whoami"))
 ```
 
-See also `examples/python_agent.py`.
+See `examples/python_agent.py`.
 
-### Stock agent UIs (Claude Desktop, etc.)
+### Agent UIs that cannot sign (Claude Desktop, etc.)
 
-They usually **cannot** sign NIP-98 themselves. Options:
+Most hosts do not implement NIP-98. Options:
 
-1. Call MCP only through a **local signing sidecar** that holds `nsec` and forwards signed HTTP.
-2. Keep high-risk tools behind this HTTP gate; use stdio only for local trust.
+1. Local **signing sidecar** that holds `nsec` and forwards signed HTTP.
+2. Keep high-risk tools on this HTTP gate; use stdio only where local trust is enough.
 
-Unsigned / Bearer-only clients get **401**. That is the product working.
+Unsigned or plain `Bearer` clients get **401**. That is the gate doing its job.
 
 ---
 
-## What is protected
+## Endpoints and demo tools
 
 | Path | Auth |
 |------|------|
 | `GET /health` | Public |
 | `GET /ready` | Public |
-| `POST /mcp` | **Required** (`tools/list`, `tools/call`) |
+| `POST /mcp` | Required |
 
-Demo tools (prove the gate):
+| Tool | Access |
+|------|--------|
+| `whoami` | Allowlisted identity |
+| `protected_echo` | Allowlisted identity |
+| `admin_ping` | Role `tools:admin` |
 
-| Tool | Who |
-|------|-----|
-| `whoami` | Any allowlisted identity |
-| `protected_echo` | Any allowlisted identity |
-| `admin_ping` | Role `tools:admin` only |
-
-Wire your real MCP tools behind the same gate pattern (or put this process as the network edge).
+Wire real tools behind the same pattern, or terminate network MCP at this process.
 
 ---
 
-## Security posture (not marketing fluff)
+## Fail-closed checks
 
-| Check | Behavior |
-|-------|----------|
-| Missing / wrong auth | 401, **no tool side effects** |
+| Check | Result |
+|-------|--------|
+| Missing / wrong auth | 401, no tool side effects |
 | Bad signature / wrong kind | 401 |
 | Clock skew outside window | 401 |
 | URL or method mismatch | 401 |
 | Body hash mismatch | 401 |
 | Empty allowlist | 401 for everyone |
 | Deny list | Wins over allow |
-| Replay (same event id) | 401 (process-local cache) |
+| Replay (same event id) | 401 (process-local) |
 | Missing tool role | 403 |
+| Auth failure body | Generic `unauthorized` (no fine reason oracle) |
+| MCP responses | `Cache-Control: no-store` (not shared-cacheable) |
 
-Red-team notes: `docs/REDTEAM_REPORT.md`, `docs/REDTEAM_WAVE2_REPORT.md`, `docs/RESIDUAL_RISKS.md`.  
-Full protocol: `docs/SPEC.md`.
+Defaults: `open: false`, `trust_proxy: false`. Auth logs never print `nsec` or full
+`Authorization` tokens. Multi-instance shared replay and stolen allowlisted `nsec`
+remain residual (see residual risks).
 
-**Defaults matter:** `open: false`, `trust_proxy: false`. Empty allowlist does **not** mean open.
+More: [SPEC](docs/SPEC.md) · [residual risks](docs/RESIDUAL_RISKS.md) · [red-team](docs/REDTEAM_REPORT.md) · [wave 2](docs/REDTEAM_WAVE2_REPORT.md)
 
 ---
 
-## Config (minimal)
-
-`mcp-auth.yaml` from quickstart already works. Shape:
+## Config
 
 ```yaml
 auth:
@@ -180,45 +212,27 @@ server:
   port: 8787
 ```
 
-Add more agents = generate more keys, append npubs to `allow_npubs`.
+Add agents by generating keys and appending npubs. Example: `examples/mcp-auth.example.yaml`.
 
----
-
-## CLI map
+## CLI
 
 | Command | Job |
 |---------|-----|
-| `quickstart` | Identity + config in one shot |
-| `serve` | Run authenticated MCP HTTP |
+| `quickstart` | Identity + config |
+| `serve` | Authenticated MCP HTTP (`--force-open` / `--force-trust-proxy` if needed) |
 | `call` / `list-tools` | Signed client |
 | `doctor` | Config + nsec + allowlist check |
-| `gen-key` / `init` | Manual pieces if you skip quickstart |
+| `gen-key` / `init` | Manual pieces |
 
----
-
-## Install options
+## Dev
 
 ```bash
-# from clone
 pip install -e ".[dev]"
-
-# tests
 pytest -q
 ```
 
-Requires Python 3.10+ and `coincurve` (BIP-340).
-
----
-
-## What you are getting that is rare
-
-Pieces of Nostr auth and pieces of MCP exist everywhere.  
-A **fail-closed NIP-98 gate for HTTP MCP**, with operator CLI, signed client, allow/deny roles, replay defense, and a red-team test matrix, does not.
-
-This is crypto identity for agent tools, not a social client.
-
----
+Python 3.10+. Uses `coincurve` for BIP-340.
 
 ## License
 
-MIT · Spec and residual risks under `docs/`
+MIT

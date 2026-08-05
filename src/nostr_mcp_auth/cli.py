@@ -10,7 +10,7 @@ import yaml
 
 from . import __version__
 from .client import call_tool, list_tools
-from .config import default_config_dict, load_config
+from .config import default_config_dict, load_config, serve_policy_errors
 from .crypto import (
     generate_private_key_hex,
     npub_encode,
@@ -162,7 +162,23 @@ def init_cmd(out_path: str, allow_npub: str | None, nsec_path: str | None) -> No
 )
 @click.option("--host", default=None)
 @click.option("--port", default=None, type=int)
-def serve_cmd(config_path: str | None, host: str | None, port: int | None) -> None:
+@click.option(
+    "--force-open",
+    is_flag=True,
+    help="Allow serve when auth.open=true (lab only)",
+)
+@click.option(
+    "--force-trust-proxy",
+    is_flag=True,
+    help="Allow serve when auth.trust_proxy=true (only behind a stripping proxy)",
+)
+def serve_cmd(
+    config_path: str | None,
+    host: str | None,
+    port: int | None,
+    force_open: bool,
+    force_trust_proxy: bool,
+) -> None:
     """Run the authenticated HTTP MCP server."""
     import uvicorn
 
@@ -176,9 +192,26 @@ def serve_cmd(config_path: str | None, host: str | None, port: int | None) -> No
         )
     raw = yaml.safe_load(found.read_text(encoding="utf-8")) or {}
     cfg = load_config(raw=raw)
+    policy = serve_policy_errors(
+        cfg, force_open=force_open, force_trust_proxy=force_trust_proxy
+    )
+    if policy:
+        for msg in policy:
+            click.secho(f"REFUSE: {msg}", fg="red", err=True)
+        raise click.ClickException(
+            "serve blocked by unsafe auth policy; fix config or pass force flags"
+        )
     if not cfg.open and not cfg.allow_pubkeys:
         click.secho(
             "WARNING: allowlist empty and open=false — every call returns 401",
+            fg="yellow",
+            err=True,
+        )
+    if force_open and cfg.open:
+        click.secho("WARNING: serving with open=true (--force-open)", fg="yellow", err=True)
+    if force_trust_proxy and cfg.trust_proxy:
+        click.secho(
+            "WARNING: serving with trust_proxy=true (--force-trust-proxy)",
             fg="yellow",
             err=True,
         )
@@ -189,7 +222,10 @@ def serve_cmd(config_path: str | None, host: str | None, port: int | None) -> No
     click.echo(f"config:    {found}")
     click.echo(f"endpoint:  http://{bind_host}:{bind_port}/mcp")
     click.echo(f"health:    http://{bind_host}:{bind_port}/health")
-    click.echo(f"allowlist: {len(cfg.allow_pubkeys)}  open={cfg.open}")
+    click.echo(
+        f"allowlist: {len(cfg.allow_pubkeys)}  open={cfg.open}  "
+        f"trust_proxy={cfg.trust_proxy}"
+    )
     uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")
 
 
@@ -256,6 +292,9 @@ def doctor_cmd(config_path: str | None, nsec_path: str) -> None:
         click.echo(f"  open={cfg.open} allowlist={len(cfg.allow_pubkeys)} trust_proxy={cfg.trust_proxy}")
         if not cfg.open and not cfg.allow_pubkeys:
             click.secho("  WARNING: empty allowlist — all calls denied", fg="yellow")
+            ok = False
+        for msg in serve_policy_errors(cfg):
+            click.secho(f"  REFUSE serve: {msg}", fg="red")
             ok = False
 
     nsec_p = Path(nsec_path)

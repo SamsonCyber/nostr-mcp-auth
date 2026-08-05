@@ -1,5 +1,6 @@
 # Copy to mcp-auth.yaml or run: nostr-mcp-auth quickstart
 auth:
+  # open/trust_proxy: serve refuses these unless --force-open / --force-trust-proxy
   open: false
   max_skew_seconds: 60
   replay_ttl_seconds: 120
