@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.nsec
+*.npub
+mcp-auth.yaml
+.mcp-auth/
+.DS_Store
+Thumbs.db

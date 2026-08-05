@@ -1,0 +1,17 @@
+# Copy to mcp-auth.yaml or run: nostr-mcp-auth quickstart
+auth:
+  open: false
+  max_skew_seconds: 60
+  replay_ttl_seconds: 120
+  trust_proxy: false
+  allow_npubs:
+    - npub1replace_me
+  deny_npubs: []
+  roles:
+    # npub1replace_me: [tools:admin]
+tools:
+  admin_ping:
+    roles: [tools:admin]
+server:
+  host: 127.0.0.1
+  port: 8787
